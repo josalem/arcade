@@ -71,10 +71,6 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
                 {
                     Log.LogError($"Problem reading asset manifest path from {AssetManifestPath}");
                 }
-                else if (string.IsNullOrEmpty(PackageAssetsBasePath) && string.IsNullOrEmpty(BlobAssetsBasePath))
-                {
-                    Log.LogError($"Base path for package and assets is invalid.");
-                }
                 else if (MaxClients <= 0)
                 {
                     Log.LogError($"{nameof(MaxClients)} should be greater than zero.");
@@ -84,12 +80,7 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
                     Log.LogError($"{nameof(UploadTimeoutInMinutes)} should be greater than zero.");
                 }
 
-                PackageAssetsBasePath = PackageAssetsBasePath.TrimEnd(Path.DirectorySeparatorChar, 
-                    Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-
-                BlobAssetsBasePath = BlobAssetsBasePath.TrimEnd(Path.DirectorySeparatorChar, 
-                    Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-
+                var buildModel = BuildManifestUtil.ManifestFileToModel(AssetManifestPath, Log);
                 var blobFeedAction = new BlobFeedAction(ExpectedFeedUrl, AccountKey, Log);
                 var pushOptions = new PushOptions
                 {
@@ -97,22 +88,46 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
                     PassIfExistingItemIdentical = PassIfExistingItemIdentical
                 };
 
-                var buildModel = BuildManifestUtil.ManifestFileToModel(AssetManifestPath, Log);
-                var packages = buildModel.Artifacts.Packages.Select(p => $"{PackageAssetsBasePath}{p.Id}.{p.Version}.nupkg");
-
-                var blobs = buildModel.Artifacts.Blobs
-                    .Select(blob =>
+                if (buildModel.Artifacts.Packages.Any())
+                {
+                    if (string.IsNullOrEmpty(PackageAssetsBasePath) || !Directory.Exists(PackageAssetsBasePath))
                     {
-                        var fileName = Path.GetFileName(blob.Id);
-                        return new MSBuild.TaskItem($"{BlobAssetsBasePath}{fileName}", new Dictionary<string, string>
-                        {
-                            {"RelativeBlobPath", $"{BuildManifestUtil.AssetsVirtualDir}{blob.Id}"}
-                        });
-                    })
-                    .ToArray();
+                        Log.LogError($"Invalid {nameof(PackageAssetsBasePath)} was informed: {PackageAssetsBasePath}");
+                        return false;
+                    }
 
-                await blobFeedAction.PushToFeedAsync(packages, pushOptions);
-                await blobFeedAction.PublishToFlatContainerAsync(blobs, MaxClients, UploadTimeoutInMinutes, pushOptions);
+                    PackageAssetsBasePath = PackageAssetsBasePath.TrimEnd(Path.DirectorySeparatorChar,
+                        Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+                    var packages = buildModel.Artifacts.Packages.Select(p => $"{PackageAssetsBasePath}{p.Id}.{p.Version}.nupkg");
+
+                    await blobFeedAction.PushToFeedAsync(packages, pushOptions);
+                }
+
+                if (buildModel.Artifacts.Blobs.Any())
+                {
+                    if (string.IsNullOrEmpty(BlobAssetsBasePath) || !Directory.Exists(BlobAssetsBasePath))
+                    {
+                        Log.LogError($"Invalid {nameof(BlobAssetsBasePath)} was informed: {BlobAssetsBasePath}");
+                        return false;
+                    }
+
+                    BlobAssetsBasePath = BlobAssetsBasePath.TrimEnd(Path.DirectorySeparatorChar, 
+                        Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+    
+                    var blobs = buildModel.Artifacts.Blobs
+                        .Select(blob =>
+                        {
+                            var fileName = Path.GetFileName(blob.Id);
+                            return new MSBuild.TaskItem($"{BlobAssetsBasePath}{fileName}", new Dictionary<string, string>
+                            {
+                                {"RelativeBlobPath", $"{BuildManifestUtil.AssetsVirtualDir}{blob.Id}"}
+                            });
+                        })
+                        .ToArray();
+    
+                    await blobFeedAction.PublishToFlatContainerAsync(blobs, MaxClients, UploadTimeoutInMinutes, pushOptions);
+                }
             }
             catch (Exception e)
             {

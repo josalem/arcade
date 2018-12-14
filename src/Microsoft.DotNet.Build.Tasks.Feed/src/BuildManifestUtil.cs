@@ -56,10 +56,11 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
         {
             try
             {
-                return BuildModel.Parse(XElement.Parse(assetManifestPath));
+                return BuildModel.Parse(XElement.Load(assetManifestPath));
             }
             catch (Exception e)
             {
+                log.LogError($"Could not parse asset manifest file: {assetManifestPath}");
                 log.LogErrorFromException(e);
                 return null;
             }
