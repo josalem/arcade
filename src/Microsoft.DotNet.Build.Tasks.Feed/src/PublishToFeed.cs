@@ -38,11 +38,20 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
 
         public int UploadTimeoutInMinutes { get; set; } = 5;
 
+        /// <summary>
+        /// Full path to the assets to publish manifest.
+        /// </summary>
         [Required]
         public string AssetManifestPath { get; set; }
 
+        /// <summary>
+        /// Full path to the folder containing blob assets.
+        /// </summary>
         public string BlobAssetsBasePath { get; set; }
 
+        /// <summary>
+        /// Full path to the folder containing package assets.
+        /// </summary>
         public string PackageAssetsBasePath { get; set; }
 
         public override bool Execute()
@@ -54,24 +63,32 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
         {
             try
             {
-                Log.LogMessage(MessageImportance.High, "Performing feed push...");
+                Log.LogMessage(MessageImportance.High, "Performing push feeds.");
 
                 if (string.IsNullOrEmpty(AssetManifestPath) || !File.Exists(AssetManifestPath))
                 {
                     Log.LogError($"Problem reading asset manifest path from {AssetManifestPath}");
                 }
-                else
+                else if (string.IsNullOrEmpty(PackageAssetsBasePath) && string.IsNullOrEmpty(BlobAssetsBasePath))
                 {
-                    BlobFeedAction blobFeedAction = new BlobFeedAction(ExpectedFeedUrl, AccountKey, Log);
-
-                    var buildModel = BuildManifestUtil.ManifestFileToModel(AssetManifestPath, Log);
-
-                    var packages = buildModel.Artifacts.Packages.Select(p => $"{PackageAssetsBasePath}{p.Id}.{p.Version}.nupkg");
-                    var symbols = buildModel.Artifacts.Blobs.Select(p => $"{BlobAssetsBasePath}{p.Id}");
-
-                    await blobFeedAction.PushToFeedAsync(packages, CreatePushOptions());
-                    await PublishToFlatContainerAsync(symbols, blobFeedAction);
+                    Log.LogError($"Base path for package and assets is invalid.");
                 }
+
+                PackageAssetsBasePath = PackageAssetsBasePath.EndsWith(Path.DirectorySeparatorChar) ?
+                    PackageAssetsBasePath : PackageAssetsBasePath + Path.DirectorySeparatorChar;
+
+                BlobAssetsBasePath = BlobAssetsBasePath.EndsWith(Path.DirectorySeparatorChar) ?
+                    BlobAssetsBasePath : BlobAssetsBasePath + Path.DirectorySeparatorChar;
+
+                BlobFeedAction blobFeedAction = new BlobFeedAction(ExpectedFeedUrl, AccountKey, Log);
+
+                var buildModel = BuildManifestUtil.ManifestFileToModel(AssetManifestPath, Log);
+
+                var packages = buildModel.Artifacts.Packages.Select(p => $"{PackageAssetsBasePath}{p.Id}.{p.Version}.nupkg");
+                var blobs = buildModel.Artifacts.Blobs.Select(p => $"{BlobAssetsBasePath}{p.Id}");
+
+                await blobFeedAction.PushToFeedAsync(packages, CreatePushOptions());
+                await PublishToFlatContainerAsync(blobs, blobFeedAction);
             }
             catch (Exception e)
             {
@@ -81,17 +98,17 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
             return !Log.HasLoggedErrors;
         }
 
-        private async Task PublishToFlatContainerAsync(IEnumerable<string> taskItems, BlobFeedAction blobFeedAction)
+        private async Task PublishToFlatContainerAsync(IEnumerable<string> blobPaths, BlobFeedAction blobFeedAction)
         {
-            if (taskItems.Any())
+            if (blobPaths.Any())
             {
                 using (var clientThrottle = new SemaphoreSlim(this.MaxClients, this.MaxClients))
                 {
-                    Log.LogMessage(MessageImportance.High, $"Uploading {taskItems.Count()} items:");
-                    await Task.WhenAll(taskItems.Select(
+                    Log.LogMessage(MessageImportance.High, $"Uploading {blobPaths.Count()} items:");
+                    await Task.WhenAll(blobPaths.Select(
                         item =>
                         {
-                            Log.LogMessage(MessageImportance.High, $"Async uploading {item.ItemSpec}");
+                            Log.LogMessage(MessageImportance.High, $"Async uploading {item}");
                             return blobFeedAction.UploadAssetAsync(
                                 item,
                                 clientThrottle,
