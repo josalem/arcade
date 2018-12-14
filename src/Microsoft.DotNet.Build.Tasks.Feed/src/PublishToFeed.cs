@@ -3,12 +3,10 @@
 // See the LICENSE file in the project root for more information.
 
 using Microsoft.Build.Framework;
-using Microsoft.DotNet.VersionTools.BuildManifest.Model;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using MSBuild = Microsoft.Build.Utilities;
 
@@ -65,7 +63,11 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
             {
                 Log.LogMessage(MessageImportance.High, "Performing push feeds.");
 
-                if (string.IsNullOrEmpty(AssetManifestPath) || !File.Exists(AssetManifestPath))
+                if (string.IsNullOrEmpty(ExpectedFeedUrl) || string.IsNullOrEmpty(AccountKey))
+                {
+                    Log.LogError($"{nameof(ExpectedFeedUrl)} / {nameof(AccountKey)} is not set properly.");
+                }
+                else if (string.IsNullOrEmpty(AssetManifestPath) || !File.Exists(AssetManifestPath))
                 {
                     Log.LogError($"Problem reading asset manifest path from {AssetManifestPath}");
                 }
@@ -73,22 +75,44 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
                 {
                     Log.LogError($"Base path for package and assets is invalid.");
                 }
+                else if (MaxClients <= 0)
+                {
+                    Log.LogError($"{nameof(MaxClients)} should be greater than zero.");
+                }
+                else if (UploadTimeoutInMinutes <= 0)
+                {
+                    Log.LogError($"{nameof(UploadTimeoutInMinutes)} should be greater than zero.");
+                }
 
-                PackageAssetsBasePath = PackageAssetsBasePath.EndsWith(Path.DirectorySeparatorChar) ?
-                    PackageAssetsBasePath : PackageAssetsBasePath + Path.DirectorySeparatorChar;
+                PackageAssetsBasePath = PackageAssetsBasePath.TrimEnd(Path.DirectorySeparatorChar, 
+                    Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
 
-                BlobAssetsBasePath = BlobAssetsBasePath.EndsWith(Path.DirectorySeparatorChar) ?
-                    BlobAssetsBasePath : BlobAssetsBasePath + Path.DirectorySeparatorChar;
+                BlobAssetsBasePath = BlobAssetsBasePath.TrimEnd(Path.DirectorySeparatorChar, 
+                    Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
 
-                BlobFeedAction blobFeedAction = new BlobFeedAction(ExpectedFeedUrl, AccountKey, Log);
+                var blobFeedAction = new BlobFeedAction(ExpectedFeedUrl, AccountKey, Log);
+                var pushOptions = new PushOptions
+                {
+                    AllowOverwrite = Overwrite,
+                    PassIfExistingItemIdentical = PassIfExistingItemIdentical
+                };
 
                 var buildModel = BuildManifestUtil.ManifestFileToModel(AssetManifestPath, Log);
-
                 var packages = buildModel.Artifacts.Packages.Select(p => $"{PackageAssetsBasePath}{p.Id}.{p.Version}.nupkg");
-                var blobs = buildModel.Artifacts.Blobs.Select(p => $"{BlobAssetsBasePath}{p.Id}");
 
-                await blobFeedAction.PushToFeedAsync(packages, CreatePushOptions());
-                await PublishToFlatContainerAsync(blobs, blobFeedAction);
+                var blobs = buildModel.Artifacts.Blobs
+                    .Select(blob =>
+                    {
+                        var fileName = Path.GetFileName(blob.Id);
+                        return new MSBuild.TaskItem($"{BlobAssetsBasePath}{fileName}", new Dictionary<string, string>
+                        {
+                            {"RelativeBlobPath", $"{BuildManifestUtil.AssetsVirtualDir}{blob.Id}"}
+                        });
+                    })
+                    .ToArray();
+
+                await blobFeedAction.PushToFeedAsync(packages, pushOptions);
+                await blobFeedAction.PublishToFlatContainerAsync(blobs, MaxClients, UploadTimeoutInMinutes, pushOptions);
             }
             catch (Exception e)
             {
@@ -96,37 +120,6 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
             }
 
             return !Log.HasLoggedErrors;
-        }
-
-        private async Task PublishToFlatContainerAsync(IEnumerable<string> blobPaths, BlobFeedAction blobFeedAction)
-        {
-            if (blobPaths.Any())
-            {
-                using (var clientThrottle = new SemaphoreSlim(this.MaxClients, this.MaxClients))
-                {
-                    Log.LogMessage(MessageImportance.High, $"Uploading {blobPaths.Count()} items:");
-                    await Task.WhenAll(blobPaths.Select(
-                        item =>
-                        {
-                            Log.LogMessage(MessageImportance.High, $"Async uploading {item}");
-                            return blobFeedAction.UploadAssetAsync(
-                                item,
-                                clientThrottle,
-                                UploadTimeoutInMinutes,
-                                CreatePushOptions());
-                        }
-                    ));
-                }
-            }
-        }
-
-        private PushOptions CreatePushOptions()
-        {
-            return new PushOptions
-            {
-                AllowOverwrite = Overwrite,
-                PassIfExistingItemIdentical = PassIfExistingItemIdentical
-            };
         }
     }
 }
