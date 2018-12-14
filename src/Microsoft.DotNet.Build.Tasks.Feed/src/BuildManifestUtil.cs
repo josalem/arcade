@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Xml.Linq;
 
 namespace Microsoft.DotNet.Build.Tasks.Feed
 {
@@ -49,6 +50,19 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
             Directory.CreateDirectory(dirPath);
 
             File.WriteAllText(assetManifestPath, buildModel.ToXml().ToString());
+        }
+
+        public static BuildModel ManifestFileToModel(string assetManifestPath, TaskLoggingHelper log)
+        {
+            try
+            {
+                return BuildModel.Parse(XElement.Parse(assetManifestPath));
+            }
+            catch (Exception e)
+            {
+                log.LogErrorFromException(e);
+                return null;
+            }
         }
 
         public static PackageArtifactModel CreatePackageArtifactModel(ITaskItem item)
