@@ -75,6 +75,11 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
                 else
                 {
                     BlobFeedAction blobFeedAction = new BlobFeedAction(ExpectedFeedUrl, AccountKey, Log);
+                    var pushOptions = new PushOptions
+                    {
+                        AllowOverwrite = Overwrite,
+                        PassIfExistingItemIdentical = PassIfExistingItemIdentical
+                    };
 
                     IEnumerable<BlobArtifactModel> blobArtifacts = Enumerable.Empty<BlobArtifactModel>();
                     IEnumerable<PackageArtifactModel> packageArtifacts = Enumerable.Empty<PackageArtifactModel>();
@@ -86,7 +91,7 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
 
                     if (PublishFlatContainer)
                     {
-                        await PublishToFlatContainerAsync(ItemsToPush, blobFeedAction);
+                        await blobFeedAction.PublishToFlatContainerAsync(ItemsToPush, MaxClients, UploadTimeoutInMinutes, pushOptions);
                         blobArtifacts = ConcatBlobArtifacts(blobArtifacts, ItemsToPush);
                     }
                     else
@@ -107,8 +112,8 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
 
                         var packagePaths = packageItems.Select(i => i.ItemSpec);
 
-                        await blobFeedAction.PushToFeedAsync(packagePaths, CreatePushOptions());
-                        await PublishToFlatContainerAsync(symbolItems, blobFeedAction);
+                        await blobFeedAction.PushToFeedAsync(packagePaths, pushOptions);
+                        await blobFeedAction.PublishToFlatContainerAsync(symbolItems, MaxClients, UploadTimeoutInMinutes, pushOptions);
 
                         packageArtifacts = ConcatPackageArtifacts(packageArtifacts, packageItems);
                         blobArtifacts = ConcatBlobArtifacts(blobArtifacts, symbolItems);
@@ -133,28 +138,6 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
             return !Log.HasLoggedErrors;
         }
 
-        private async Task PublishToFlatContainerAsync(IEnumerable<ITaskItem> taskItems, BlobFeedAction blobFeedAction)
-        {
-            if (taskItems.Any())
-            {
-                using (var clientThrottle = new SemaphoreSlim(this.MaxClients, this.MaxClients))
-                {
-                    Log.LogMessage(MessageImportance.High, $"Uploading {taskItems.Count()} items:");
-                    await Task.WhenAll(taskItems.Select(
-                        item =>
-                        {
-                            Log.LogMessage(MessageImportance.High, $"Async uploading {item.ItemSpec}");
-                            return blobFeedAction.UploadAssetAsync(
-                                item,
-                                clientThrottle,
-                                UploadTimeoutInMinutes,
-                                CreatePushOptions());
-                        }
-                    ));
-                }
-            }
-        }
-
         private static IEnumerable<PackageArtifactModel> ConcatPackageArtifacts(
             IEnumerable<PackageArtifactModel> artifacts,
             IEnumerable<ITaskItem> items)
@@ -170,15 +153,6 @@ namespace Microsoft.DotNet.Build.Tasks.Feed
             return artifacts.Concat(items
                 .Select(BuildManifestUtil.CreateBlobArtifactModel)
                 .Where(blob => blob != null));
-        }
-
-        private PushOptions CreatePushOptions()
-        {
-            return new PushOptions
-            {
-                AllowOverwrite = Overwrite,
-                PassIfExistingItemIdentical = PassIfExistingItemIdentical
-            };
         }
     }
 }
