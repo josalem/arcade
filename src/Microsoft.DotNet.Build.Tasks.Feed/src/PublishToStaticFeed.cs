@@ -12,7 +12,7 @@ using MSBuild = Microsoft.Build.Utilities;
 
 namespace Microsoft.DotNet.Build.Tasks.Feed
 {
-    public class PublishToFeed : MSBuild.Task
+    public class PublishToStaticFeed : MSBuild.Task
     {
         [Required]
         public string ExpectedFeedUrl { get; set; }
